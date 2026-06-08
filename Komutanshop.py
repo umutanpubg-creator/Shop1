@@ -20,7 +20,7 @@ def save_db(data):
 users_db = load_db()
 
 def get_marzban_stats(sub_url):
-    """Marzban linkinden anlık kota ve durum bilgilerini çeker."""
+    """Marzban linkinin HTTP Header'ından anlık kota durumunu çeker."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) v2rayN/6.23"
     }
@@ -53,44 +53,49 @@ def get_marzban_stats(sub_url):
             
             return f"{used_gb} / {total_gb if total_gb > 0 else 'Çäksiz'} GB", status_pct
     except Exception as e:
-        print(f"Marzban istatistik hatası: {e}")
+        print(f"Marzban veri okuma hatası: {e}")
     
     return "0.0 / 50.0 GB", "0%"
 
 def generate_happ_crypt5(title, description, sub_url):
     """
-    Panelden gelen 1. Yazı (title), 2. Yazı (description) ve Marzban URL'sini (sub_url) 
-    Happ API'sinin beklediği tam şablona oturtup crypt5 formatına dönüştürür.
+    Paneldeki 3 veriyi Happ API'sinin tam olarak tanıdığı parametre isimleriyle paketler
+    ve geriye 'happ://crypt5/...' şeklinde şifrelenmiş kodu döndürür.
     """
     api_url = "https://crypto.happ.su/api-v2.php"
     
-    # Happ istemcisinin çözdüğünde algıladığı standart obje yapısı
+    # Happ istemcisinin çözdüğünde tam olarak aradığı parametre haritası:
+    # name = Uygulamanın en üstündeki Başlık (HappiVPN {Free})
+    # content = 77 GB altındaki o detaylı duyuru alanı
+    # url = Arka planda çalışan gerçek Marzban linki
     payload = {
-        "title": title,         # 1. Yazı Yeri -> Uygulamadaki Ana Başlık
-        "description": description, # 2. Yazı Yeri -> İlerleme çubuğu altındaki Duyuru metni
-        "url": sub_url          # 3. Yazı Yeri -> Arka plandaki Marzban proxy listesi
+        "name": title,
+        "content": description,
+        "url": sub_url
     }
     
     headers = {"Content-Type": "application/json"}
     
     try:
-        response = requests.post(api_url, json=payload, headers=headers, timeout=7)
+        response = requests.post(api_url, json=payload, headers=headers, timeout=10)
         if response.status_code == 200:
             res_text = response.text.strip()
+            # Eğer API doğrudan crypt5 string dönerse
             if res_text.startswith("happ://crypt5/"):
                 return res_text
             else:
+                # API obje dönerse içinden şifreli veriyi ayıklıyoruz
                 try:
                     res_json = response.json()
-                    return res_json.get("url") or res_json.get("crypt") or res_text
+                    return res_json.get("crypt") or res_json.get("url") or res_text
                 except:
                     return res_text
     except Exception as e:
-        print(f"Happ Kripto API Bağlantı Hatası: {e}")
+        print(f"Happ Kripto Sunucu Bağlantı Hatası: {e}")
     
     return None
 
-# HTML Arayüz Tasarımı
+# HTML Arayüzü (Görsellerdeki Tasarıma Göre Tam Senkronize Edildi)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tk">
@@ -134,7 +139,7 @@ HTML_TEMPLATE = """
         .btn-create { background-color: var(--accent-blue); color: white; border: none; padding: 10px 18px; border-radius: 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: 0.2s; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3); }
         .btn-create:hover { background-color: var(--accent-glow); transform: translateY(-1px); }
 
-        .user-card { background-color: var(--card-bg); border-radius: 16px; padding: 15px; margin-bottom: 12px; width: 100%; border-left: 4px solid #1e293b; }
+        .user-card { background-color: var(--card-bg); border-radius: 16px; padding: 15px; margin-bottom: 12px; width: 100%; }
         .user-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .user-name { display: flex; align-items: center; gap: 8px; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; max-width: 70%; }
         .badge { background-color: #1e293b; color: #3b82f6; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
@@ -194,10 +199,10 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="status-badge">{{ user.status }}</div>
             </div>
-            <div class="user-stats-text">{{ user.usage }} • {{ user.description[:40] }}{% if user.description|length > 40 %}...{% endif %}</div>
+            <div class="user-stats-text">{{ user.usage }} • {{ user.description }}</div>
             
             <div class="action-buttons">
-                <button class="btn-action btn-kodal" onclick="copyToClipboard('{{ user.encrypted_code }}', 'Happ Crypt5 kody kopyalandy!')">Kod al</button>
+                <button class="btn-action btn-kodal" onclick="copyToClipboard('{{ user.encrypted_code }}', 'Happ Crypt5 kody panoya kopyalandy!')">Kod al</button>
                 <button class="btn-action btn-secondary" onclick="downloadFile('{{ user.title }}', '{{ user.encrypted_code }}')">File</button>
                 <button class="btn-action btn-secondary" onclick="copyToClipboard('{{ user.sub_url }}', 'Marzban URL kopyalandy!')">URL</button>
             </div>
@@ -210,7 +215,7 @@ HTML_TEMPLATE = """
     <div class="modal-content">
         <h3>Taze Ulanyjy Döret</h3>
         <input type="text" id="title" placeholder="1. Yazı Yeri (Örn: HappiVPN {Free})">
-        <textarea id="description" placeholder="2. Yazı Yeri (Uygulamadaki duyuru yazısı)"></textarea>
+        <textarea id="description" placeholder="2. Yazı Yeri (77GB altındaki duyuru yazısı)"></textarea>
         <input type="url" id="sub_url" placeholder="3. Yazı Yeri (Marzban Subscription URL)">
         
         <div class="modal-actions">
@@ -255,7 +260,7 @@ HTML_TEMPLATE = """
             } else {
                 alert(data.message);
             }
-        }).catch(err => alert("Şifreleme sırasında hata oluştu!"));
+        }).catch(err => alert("Şifreleme motoru yanıt vermedi!"));
     }
 
     function copyToClipboard(text, successMessage) {
@@ -283,9 +288,9 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
+    # Sayfa her açıldığında mevcut Marzban linklerinin kotalarını anlık tazeler
     updated_db = []
     for user in users_db:
-        # Panel arayüzünde kotaları anlık tazeleyelim
         usage, status = get_marzban_stats(user["sub_url"])
         user["usage"] = usage
         user["status"] = status
@@ -303,13 +308,13 @@ def add_user():
     sub_url = data.get('sub_url')
     
     if not title or not sub_url:
-        return jsonify({"status": "error", "message": "Eksik alanları doldurun!"}), 400
+        return jsonify({"status": "error", "message": "Gerekli alanları doldurun!"}), 400
         
-    # Girilen 1, 2 ve 3 numaralı alanları birleştirip resmi şifreleme motoruna paketliyoruz
+    # 'Tamam' butonuna basıldığı an, arka planda Happ API'sine bağlanıp tam uyumlu happ://crypt5/ şifrelemesini üretir.
     encrypted_code = generate_happ_crypt5(title, description, sub_url)
     
     if not encrypted_code:
-        return jsonify({"status": "error", "message": "Happ kripto servisi kodu şifreleyemedi!"}), 500
+        return jsonify({"status": "error", "message": "Happ şifreleme motorundan kod alınamadı! Linki kontrol edin."}), 500
         
     usage, status = get_marzban_stats(sub_url)
     
@@ -318,7 +323,7 @@ def add_user():
         "title": title,
         "description": description,
         "sub_url": sub_url,
-        "encrypted_code": encrypted_code,
+        "encrypted_code": encrypted_code, # Tam istediğin happ://crypt5/... yapısı burada saklanır
         "usage": usage,
         "status": status
     }
