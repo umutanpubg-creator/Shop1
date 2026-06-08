@@ -1,34 +1,96 @@
 from flask import Flask, request, jsonify, render_template_string
-import base64
 import json
+import os
+import requests
 
 app = Flask(__name__)
 
-# Başlangıç veri tabanı simülasyonu (Örnek veri)
-users_db = [
-    {
-        "id": "1",
-        "title": "HappiVPN {Free}",
-        "description": "Telegram: @HappiVPN | Satyn almak ucin: @HappiVPN_bot",
-        "sub_url": "https://marzban.example.com/sub/admin/123456",
-        "encrypted_code": "happ://ZXlKMGFYUnSaVzVmZDJsemRHOXlhVzUwSWpvaVFXNXRpV1p1SWl3aVpYSndhVzVsWkNJNkZDSXNJbU52Ym1ScFptbHNiMk5oZEdsdmJpSTZJQ0lzSW1saVpYSnVZVzFsSWpvaUlpd2laVzVqY25sd2RHRmtYMk52YkdSbGNpSTZJQ0lzSW1sdVpYUnpaV05wYlhCcVpYTWlPaUlpZlgwPQ==",
-        "usage": "0.0 / 50.0 GB",
-        "status": "0%"
-    }
-]
+DB_FILE = "users_db.json"
 
-def encrypt_happ_data(title, description, sub_url):
-    """Formdan gelen 3 veriyi birleştirip 'happ://' protokolüyle Base64 olarak şifreler."""
-    config = {
-        "title": title,
-        "description": description,
-        "sub_url": sub_url
-    }
-    json_str = json.dumps(config, ensure_ascii=False)
-    encrypted_bytes = base64.b64encode(json_str.encode('utf-8'))
-    return f"happ://{encrypted_bytes.decode('utf-8')}"
+def load_db():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
 
-# HTML Arayüzü doğrudan Python kodunun içine gömüldü
+def save_db(data):
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+users_db = load_db()
+
+def get_marzban_stats(sub_url):
+    """Marzban linkinden anlık kota ve durum bilgilerini çeker."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) v2rayN/6.23"
+    }
+    try:
+        response = requests.get(sub_url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            user_info = response.headers.get("Subscription-User-Info") or response.headers.get("subscription-user-info")
+            
+            used_gb = 0.0
+            total_gb = 0.0
+            status_pct = "0%"
+            
+            if user_info:
+                data_dict = {}
+                for item in user_info.split(";"):
+                    if "=" in item:
+                        k, v = item.strip().split("=")
+                        data_dict[k] = int(v) if v.isdigit() else 0
+                
+                upload = data_dict.get("upload", 0)
+                download = data_dict.get("download", 0)
+                total = data_dict.get("total", 0)
+                
+                used_bytes = upload + download
+                used_gb = round(used_bytes / (1024**3), 1)
+                total_gb = round(total / (1024**3), 1) if total > 0 else 0.0
+                
+                if total > 0:
+                    status_pct = f"{min(int((used_bytes / total) * 100), 100)}%"
+            
+            return f"{used_gb} / {total_gb if total_gb > 0 else 'Çäksiz'} GB", status_pct
+    except Exception as e:
+        print(f"Marzban istatistik hatası: {e}")
+    
+    return "0.0 / 50.0 GB", "0%"
+
+def generate_happ_crypt5(title, description, sub_url):
+    """
+    Panelden gelen 1. Yazı (title), 2. Yazı (description) ve Marzban URL'sini (sub_url) 
+    Happ API'sinin beklediği tam şablona oturtup crypt5 formatına dönüştürür.
+    """
+    api_url = "https://crypto.happ.su/api-v2.php"
+    
+    # Happ istemcisinin çözdüğünde algıladığı standart obje yapısı
+    payload = {
+        "title": title,         # 1. Yazı Yeri -> Uygulamadaki Ana Başlık
+        "description": description, # 2. Yazı Yeri -> İlerleme çubuğu altındaki Duyuru metni
+        "url": sub_url          # 3. Yazı Yeri -> Arka plandaki Marzban proxy listesi
+    }
+    
+    headers = {"Content-Type": "application/json"}
+    
+    try:
+        response = requests.post(api_url, json=payload, headers=headers, timeout=7)
+        if response.status_code == 200:
+            res_text = response.text.strip()
+            if res_text.startswith("happ://crypt5/"):
+                return res_text
+            else:
+                try:
+                    res_json = response.json()
+                    return res_json.get("url") or res_json.get("crypt") or res_text
+                except:
+                    return res_text
+    except Exception as e:
+        print(f"Happ Kripto API Bağlantı Hatası: {e}")
+    
+    return None
+
+# HTML Arayüz Tasarımı
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tk">
@@ -52,17 +114,14 @@ HTML_TEMPLATE = """
         
         .container { width: 100%; max-width: 480px; }
 
-        /* Sol Üst Başlık ve Duyuru Alanı */
         .header { margin-bottom: 25px; display: flex; flex-direction: column; text-align: left; }
         .logo-area { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
         .logo-icon { width: 32px; height: 32px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
         .logo-text { font-size: 22px; font-weight: bold; letter-spacing: 0.5px; }
         
-        /* İstediğiniz Özel Duyuru Metinleri */
         .owner-notice { font-size: 13px; color: var(--text-muted); margin-bottom: 2px; font-weight: 500; padding-left: 2px; }
         .owner-tg { font-size: 13px; color: var(--accent-glow); font-weight: bold; margin-bottom: 10px; padding-left: 2px; }
 
-        /* İstatistik Kartı */
         .stat-card { background-color: var(--card-bg); padding: 20px; border-radius: 16px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid var(--accent-blue); position: relative; width: 100%; }
         .stat-info { display: flex; align-items: center; gap: 15px; }
         .stat-icon-wrapper { width: 45px; height: 45px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
@@ -70,27 +129,25 @@ HTML_TEMPLATE = """
         .stat-label { font-size: 15px; color: #cbd5e1; }
         .stat-value { font-size: 22px; font-weight: bold; }
 
-        /* Kullanıcı Yönetim Alanı */
         .section-header { display: flex; justify-content: space-between; align-items: center; margin: 25px 0 15px 0; width: 100%; }
         .section-title { font-size: 19px; font-weight: 600; }
         .btn-create { background-color: var(--accent-blue); color: white; border: none; padding: 10px 18px; border-radius: 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: 0.2s; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3); }
         .btn-create:hover { background-color: var(--accent-glow); transform: translateY(-1px); }
 
-        /* Kullanıcı Listesi Kart Şablonu */
-        .user-card { background-color: var(--card-bg); border-radius: 16px; padding: 15px; margin-bottom: 12px; width: 100%; }
+        .user-card { background-color: var(--card-bg); border-radius: 16px; padding: 15px; margin-bottom: 12px; width: 100%; border-left: 4px solid #1e293b; }
         .user-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .user-name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+        .user-name { display: flex; align-items: center; gap: 8px; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; max-width: 70%; }
         .badge { background-color: #1e293b; color: #3b82f6; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
         .status-badge { color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
-        .user-stats-text { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; text-align: left; }
+        .user-stats-text { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; text-align: left; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
         
         .action-buttons { display: flex; gap: 8px; }
         .btn-action { flex: 1; padding: 10px; border-radius: 10px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.2s; text-align: center; }
         .btn-kodal { background-color: var(--accent-blue); color: white; }
         .btn-kodal:hover { background-color: var(--accent-glow); }
         .btn-secondary { background-color: #1e293b; color: #94a3b8; }
+        .btn-secondary:hover { background-color: #334155; color: #f8fafc; }
 
-        /* Pop-up Modal */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 100; }
         .modal-content { background-color: var(--card-bg); width: 100%; max-width: 400px; border-radius: 20px; padding: 25px; border: 1px solid #1e293b; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: left; }
         .modal-content h3 { margin-bottom: 15px; font-size: 18px; color: white; }
@@ -132,17 +189,17 @@ HTML_TEMPLATE = """
         <div class="user-card">
             <div class="user-meta">
                 <div class="user-name">
-                    <span>Y</span>
-                    <span class="badge">admin</span>
+                    <span>{{ user.title }}</span>
+                    <span class="badge">crypt5</span>
                 </div>
                 <div class="status-badge">{{ user.status }}</div>
             </div>
-            <div class="user-stats-text">{{ user.usage }} • Çäksiz</div>
+            <div class="user-stats-text">{{ user.usage }} • {{ user.description[:40] }}{% if user.description|length > 40 %}...{% endif %}</div>
             
             <div class="action-buttons">
-                <button class="btn-action btn-kodal" onclick="copyCode('{{ user.encrypted_code }}')">Kod al</button>
-                <button class="btn-action btn-secondary">File</button>
-                <button class="btn-action btn-secondary">URL</button>
+                <button class="btn-action btn-kodal" onclick="copyToClipboard('{{ user.encrypted_code }}', 'Happ Crypt5 kody kopyalandy!')">Kod al</button>
+                <button class="btn-action btn-secondary" onclick="downloadFile('{{ user.title }}', '{{ user.encrypted_code }}')">File</button>
+                <button class="btn-action btn-secondary" onclick="copyToClipboard('{{ user.sub_url }}', 'Marzban URL kopyalandy!')">URL</button>
             </div>
         </div>
         {% endfor %}
@@ -153,7 +210,7 @@ HTML_TEMPLATE = """
     <div class="modal-content">
         <h3>Taze Ulanyjy Döret</h3>
         <input type="text" id="title" placeholder="1. Yazı Yeri (Örn: HappiVPN {Free})">
-        <textarea id="description" placeholder="2. Yazı Yeri (77GB altındaki duyuru yazısı)"></textarea>
+        <textarea id="description" placeholder="2. Yazı Yeri (Uygulamadaki duyuru yazısı)"></textarea>
         <input type="url" id="sub_url" placeholder="3. Yazı Yeri (Marzban Subscription URL)">
         
         <div class="modal-actions">
@@ -198,15 +255,25 @@ HTML_TEMPLATE = """
             } else {
                 alert(data.message);
             }
-        });
+        }).catch(err => alert("Şifreleme sırasında hata oluştu!"));
     }
 
-    function copyCode(encryptedCode) {
-        navigator.clipboard.writeText(encryptedCode).then(() => {
-            alert("Happ şifrelenmiş kod panoya kopyalandı!");
+    function copyToClipboard(text, successMessage) {
+        navigator.clipboard.writeText(text).then(() => {
+            alert(successMessage);
         }).catch(err => {
             alert("Kopyalama başarısız oldu.");
         });
+    }
+
+    function downloadFile(filename, text) {
+        const element = document.createElement('a');
+        element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+        element.setAttribute('download', filename.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".happ");
+        element.style.display = 'none';
+        document.body.appendChild(element);
+        element.click();
+        document.body.removeChild(element);
     }
 </script>
 
@@ -216,20 +283,35 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    active_count = len(users_db)
-    return render_template_string(HTML_TEMPLATE, users=users_db, active_count=active_count)
+    updated_db = []
+    for user in users_db:
+        # Panel arayüzünde kotaları anlık tazeleyelim
+        usage, status = get_marzban_stats(user["sub_url"])
+        user["usage"] = usage
+        user["status"] = status
+        updated_db.append(user)
+    
+    save_db(updated_db)
+    active_count = len(updated_db)
+    return render_template_string(HTML_TEMPLATE, users=updated_db, active_count=active_count)
 
 @app.route('/add_user', methods=['POST'])
 def add_user():
     data = request.json
     title = data.get('title')
-    description = data.get('description')
+    description = data.get('description') or ""
     sub_url = data.get('sub_url')
     
     if not title or not sub_url:
-        return jsonify({"status": "error", "message": "Gerekli alanları doldurun!"}), 400
+        return jsonify({"status": "error", "message": "Eksik alanları doldurun!"}), 400
         
-    encrypted_code = encrypt_happ_data(title, description, sub_url)
+    # Girilen 1, 2 ve 3 numaralı alanları birleştirip resmi şifreleme motoruna paketliyoruz
+    encrypted_code = generate_happ_crypt5(title, description, sub_url)
+    
+    if not encrypted_code:
+        return jsonify({"status": "error", "message": "Happ kripto servisi kodu şifreleyemedi!"}), 500
+        
+    usage, status = get_marzban_stats(sub_url)
     
     new_user = {
         "id": str(len(users_db) + 1),
@@ -237,10 +319,12 @@ def add_user():
         "description": description,
         "sub_url": sub_url,
         "encrypted_code": encrypted_code,
-        "usage": "0.0 / 50.0 GB",
-        "status": "0%"
+        "usage": usage,
+        "status": status
     }
+    
     users_db.append(new_user)
+    save_db(users_db)
     return jsonify({"status": "success"})
 
 if __name__ == '__main__':
