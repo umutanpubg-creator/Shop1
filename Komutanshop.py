@@ -1,213 +1,247 @@
-# bot.py
+from flask import Flask, request, jsonify, render_template_string
+import base64
 import json
-import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
 
-TOKEN = "8437293037:AAHrYlUY2SU8VdM-EXedLcTF-Trg_4KHZ2w"
-ADMIN_ID = 7279061074  # kendi Telegram ID
+app = Flask(__name__)
 
-URUN_DOSYA = "urunler.json"
+# Başlangıç veri tabanı simülasyonu (Örnek veri)
+users_db = [
+    {
+        "id": "1",
+        "title": "HappiVPN {Free}",
+        "description": "Telegram: @HappiVPN | Satyn almak ucin: @HappiVPN_bot",
+        "sub_url": "https://marzban.example.com/sub/admin/123456",
+        "encrypted_code": "happ://ZXlKMGFYUnSaVzVmZDJsemRHOXlhVzUwSWpvaVFXNXRpV1p1SWl3aVpYSndhVzVsWkNJNkZDSXNJbU52Ym1ScFptbHNiMk5oZEdsdmJpSTZJQ0lzSW1saVpYSnVZVzFsSWpvaUlpd2laVzVqY25sd2RHRmtYMk52YkdSbGNpSTZJQ0lzSW1sdVpYUnpaV05wYlhCcVpYTWlPaUlpZlgwPQ==",
+        "usage": "0.0 / 50.0 GB",
+        "status": "0%"
+    }
+]
 
-# --- Dosya okuma/yazma ---
-def urunleri_oku():
-    if not os.path.exists(URUN_DOSYA):
-        with open(URUN_DOSYA, "w", encoding="utf-8") as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
-        return []
-    with open(URUN_DOSYA, "r", encoding="utf-8") as f:
-        return json.load(f)
+def encrypt_happ_data(title, description, sub_url):
+    """Formdan gelen 3 veriyi birleştirip 'happ://' protokolüyle Base64 olarak şifreler."""
+    config = {
+        "title": title,
+        "description": description,
+        "sub_url": sub_url
+    }
+    json_str = json.dumps(config, ensure_ascii=False)
+    encrypted_bytes = base64.b64encode(json_str.encode('utf-8'))
+    return f"happ://{encrypted_bytes.decode('utf-8')}"
 
-def urunleri_yaz(veri):
-    with open(URUN_DOSYA, "w", encoding="utf-8") as f:
-        json.dump(veri, f, ensure_ascii=False, indent=2)
+# HTML Arayüzü doğrudan Python kodunun içine gömüldü
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="tk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscription Panel</title>
+    <style>
+        :root {
+            --bg-color: #0b111e;
+            --card-bg: #131c2e;
+            --input-bg: #1b263b;
+            --accent-blue: #2563eb;
+            --accent-glow: #3b82f6;
+            --text-main: #ffffff;
+            --text-muted: #64748b;
+        }
 
-def is_admin(user_id):
-    return user_id == ADMIN_ID
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: var(--bg-color); color: var(--text-main); padding: 20px; display: flex; justify-content: center; }
+        
+        .container { width: 100%; max-width: 480px; }
 
-# --- /start komutu (müşteri tarafı) ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    urunler = urunleri_oku()
-    if not urunler:
-        await update.message.reply_text("Mağazamızda henüz ürün yok.")
-        return
-    bolumler = sorted(list(set(u["bolum"] for u in urunler)))
-    keyboard = [[InlineKeyboardButton(b, callback_data=f"user_bolum::{b}")] for b in bolumler]
-    await update.message.reply_text("🛍️ Mağazaya hoş geldin! Bölümler:", reply_markup=InlineKeyboardMarkup(keyboard))
+        /* Sol Üst Başlık ve Duyuru Alanı */
+        .header { margin-bottom: 25px; display: flex; flex-direction: column; text-align: left; }
+        .logo-area { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+        .logo-icon { width: 32px; height: 32px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+        .logo-text { font-size: 22px; font-weight: bold; letter-spacing: 0.5px; }
+        
+        /* İstediğiniz Özel Duyuru Metinleri */
+        .owner-notice { font-size: 13px; color: var(--text-muted); margin-bottom: 2px; font-weight: 500; padding-left: 2px; }
+        .owner-tg { font-size: 13px; color: var(--accent-glow); font-weight: bold; margin-bottom: 10px; padding-left: 2px; }
 
-# --- /panel komutu (admin) ---
-async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Bu komutu kullanma yetkin yok.")
-        return
-    urunler = urunleri_oku()
-    bolumler = sorted(list(set(u["bolum"] for u in urunler))) or ["Yeni Bölüm"]
-    keyboard = [[InlineKeyboardButton(b, callback_data=f"bolum::{b}")] for b in bolumler]
-    keyboard.append([InlineKeyboardButton("❌ Kapat", callback_data="panel_close")])
-    await update.message.reply_text("👑 Admin Paneli: Bölümler", reply_markup=InlineKeyboardMarkup(keyboard))
+        /* İstatistik Kartı */
+        .stat-card { background-color: var(--card-bg); padding: 20px; border-radius: 16px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid var(--accent-blue); position: relative; width: 100%; }
+        .stat-info { display: flex; align-items: center; gap: 15px; }
+        .stat-icon-wrapper { width: 45px; height: 45px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .icon-blue { background-color: rgba(37, 99, 235, 0.2); color: #3b82f6; }
+        .stat-label { font-size: 15px; color: #cbd5e1; }
+        .stat-value { font-size: 22px; font-weight: bold; }
 
-# --- Callback query handler ---
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    data = query.data
-    urunler = urunleri_oku()
+        /* Kullanıcı Yönetim Alanı */
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin: 25px 0 15px 0; width: 100%; }
+        .section-title { font-size: 19px; font-weight: 600; }
+        .btn-create { background-color: var(--accent-blue); color: white; border: none; padding: 10px 18px; border-radius: 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: 0.2s; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3); }
+        .btn-create:hover { background-color: var(--accent-glow); transform: translateY(-1px); }
 
-    # --- Admin Panel ---
-    if is_admin(user_id):
-        # Panel kapatma
-        if data == "panel_close":
-            await query.edit_message_text("Panel kapatıldı ✔️")
-            return
+        /* Kullanıcı Listesi Kart Şablonu */
+        .user-card { background-color: var(--card-bg); border-radius: 16px; padding: 15px; margin-bottom: 12px; width: 100%; }
+        .user-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .user-name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+        .badge { background-color: #1e293b; color: #3b82f6; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
+        .status-badge { color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .user-stats-text { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; text-align: left; }
+        
+        .action-buttons { display: flex; gap: 8px; }
+        .btn-action { flex: 1; padding: 10px; border-radius: 10px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.2s; text-align: center; }
+        .btn-kodal { background-color: var(--accent-blue); color: white; }
+        .btn-kodal:hover { background-color: var(--accent-glow); }
+        .btn-secondary { background-color: #1e293b; color: #94a3b8; }
 
-        # Bölüm seçimi (admin)
-        if data.startswith("bolum::"):
-            bolum = data.split("::",1)[1]
-            urun_listesi = [u for u in urunler if u["bolum"]==bolum]
-            if not urun_listesi:
-                await query.edit_message_text(f"{bolum} bölümünde ürün yok.")
-                return
-            keyboard = []
-            for u in urun_listesi:
-                keyboard.append([InlineKeyboardButton(f"🗑️ {u['isim']}", callback_data=f"delete::{bolum}::{u['isim']}")])
-                keyboard.append([InlineKeyboardButton(f"✏️ {u['isim']}", callback_data=f"edit::{bolum}::{u['isim']}")])
-            keyboard.append([InlineKeyboardButton("➕ Ürün Ekle", callback_data=f"add::{bolum}")])
-            keyboard.append([InlineKeyboardButton("🔙 Bölümler", callback_data="panel")])
-            await query.edit_message_text(f"📂 {bolum} Bölümü", reply_markup=InlineKeyboardMarkup(keyboard))
-            return
+        /* Pop-up Modal */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 100; }
+        .modal-content { background-color: var(--card-bg); width: 100%; max-width: 400px; border-radius: 20px; padding: 25px; border: 1px solid #1e293b; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: left; }
+        .modal-content h3 { margin-bottom: 15px; font-size: 18px; color: white; }
+        .modal-content input, .modal-content textarea { width: 100%; background-color: var(--input-bg); border: 1px solid #1e293b; border-radius: 10px; padding: 12px; color: white; margin-bottom: 12px; font-size: 14px; outline: none; }
+        .modal-content input:focus, .modal-content textarea:focus { border-color: var(--accent-glow); }
+        .modal-content textarea { height: 80px; resize: none; }
+        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 5px; }
+        .btn-submit { background-color: var(--accent-blue); color: white; padding: 10px 20px; border-radius: 10px; border: none; cursor: pointer; font-weight: 600; }
+        .btn-cancel { background-color: #334155; color: white; padding: 10px 20px; border-radius: 10px; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
 
-        # Ürün sil
-        if data.startswith("delete::"):
-            _, bolum, isim = data.split("::")
-            urunler = [u for u in urunler if not (u["bolum"]==bolum and u["isim"]==isim)]
-            urunleri_yaz(urunler)
-            await query.edit_message_text(f"✅ '{isim}' ürünü silindi.")
-            return
+<div class="container">
+    <div class="header">
+        <div class="logo-area">
+            <div class="logo-icon">S</div>
+            <div class="logo-text">Subscription Panel</div>
+        </div>
+        <div class="owner-notice">Ähli näsazlyklar uçin ownere yüz tutun</div>
+        <div class="owner-tg">TG: @Komutan_Creator</div>
+    </div>
 
-        # Ürün ekleme
-        if data.startswith("add::"):
-            _, bolum = data.split("::")
-            context.user_data["state"] = "adding"
-            context.user_data["add_bolum"] = bolum
-            await query.edit_message_text(f"➕ {bolum} bölümüne ürün ekleme moduna girdin.\nLütfen mesajla gönder:\nisim;fiyat\nÖrn: Tişört;150")
-            return
+    <div class="stat-card">
+        <div class="stat-info">
+            <div class="stat-icon-wrapper icon-blue">👥</div>
+            <div class="stat-label">Aktiw ulanyjylar</div>
+        </div>
+        <div class="stat-value" id="active-count-display">{{ active_count }} / {{ active_count }}</div>
+    </div>
 
-        # Ürün fiyat düzenleme
-        if data.startswith("edit::"):
-            _, bolum, isim = data.split("::")
-            context.user_data["state"] = "editing"
-            context.user_data["edit_bolum"] = bolum
-            context.user_data["edit_target"] = isim
-            await query.edit_message_text(f"✏️ '{isim}' ürünü için yeni fiyatı gönder (sadece sayı).")
-            return
+    <div class="section-header">
+        <div class="section-title">Ulanyjy kodlary</div>
+        <button class="btn-create" onclick="openModal()">+ Ulanyjy döret</button>
+    </div>
 
-        # Ana panele geri dön
-        if data == "panel":
-            await panel(update, context)
-            return
+    <div id="users-list">
+        {% for user in users %}
+        <div class="user-card">
+            <div class="user-meta">
+                <div class="user-name">
+                    <span>Y</span>
+                    <span class="badge">admin</span>
+                </div>
+                <div class="status-badge">{{ user.status }}</div>
+            </div>
+            <div class="user-stats-text">{{ user.usage }} • Çäksiz</div>
+            
+            <div class="action-buttons">
+                <button class="btn-action btn-kodal" onclick="copyCode('{{ user.encrypted_code }}')">Kod al</button>
+                <button class="btn-action btn-secondary">File</button>
+                <button class="btn-action btn-secondary">URL</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
 
-    # --- Kullanıcı tarafı (müşteri) ---
-    if data.startswith("user_bolum::"):
-        bolum = data.split("::",1)[1]
-        urun_listesi = [u for u in urunler if u["bolum"]==bolum]
-        if not urun_listesi:
-            await query.edit_message_text(f"{bolum} bölümünde ürün yok.")
-            return
-        keyboard = [[InlineKeyboardButton(f"🛒 {u['isim']} ({u['fiyat']} TL)", callback_data=f"buy::{bolum}::{u['isim']}")] for u in urun_listesi]
-        keyboard.append([InlineKeyboardButton("🔙 Bölümler", callback_data="user_back")])
-        await query.edit_message_text(f"📂 {bolum} Bölümü Ürünler:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
+<div class="modal-overlay" id="addModal">
+    <div class="modal-content">
+        <h3>Taze Ulanyjy Döret</h3>
+        <input type="text" id="title" placeholder="1. Yazı Yeri (Örn: HappiVPN {Free})">
+        <textarea id="description" placeholder="2. Yazı Yeri (77GB altındaki duyuru yazısı)"></textarea>
+        <input type="url" id="sub_url" placeholder="3. Yazı Yeri (Marzban Subscription URL)">
+        
+        <div class="modal-actions">
+            <button class="btn-cancel" onclick="closeModal()">Ýatyr</button>
+            <button class="btn-submit" onclick="submitUser()">Tamam</button>
+        </div>
+    </div>
+</div>
 
-    if data == "user_back":
-        # Bölüm seçimine dön
-        urunler = urunleri_oku()
-        bolumler = sorted(list(set(u["bolum"] for u in urunler)))
-        keyboard = [[InlineKeyboardButton(b, callback_data=f"user_bolum::{b}")] for b in bolumler]
-        await query.edit_message_text("🛍️ Mağazaya hoş geldin! Bölümler:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
+<script>
+    function openModal() {
+        document.getElementById('addModal').style.display = 'flex';
+    }
 
-    # Satın alma butonu
-    if data.startswith("buy::"):
-        _, bolum, isim = data.split("::")
-        # Admin'e bildirim gönder
-        try:
-            await context.bot.send_message(ADMIN_ID, f"🛒 Kullanıcı @{query.from_user.username or query.from_user.first_name} {bolum} bölümünden '{isim}' almak istiyor.")
-        except:
-            # Kullanıcının username yoksa first_name
-            await context.bot.send_message(ADMIN_ID, f"🛒 Kullanıcı {query.from_user.first_name} {bolum} bölümünden '{isim}' almak istiyor.")
-        await query.edit_message_text(f"✅ Sipariş talebiniz iletildi: '{isim}'")
-        return
+    function closeModal() {
+        document.getElementById('addModal').style.display = 'none';
+        document.getElementById('title').value = '';
+        document.getElementById('description').value = '';
+        document.getElementById('sub_url').value = '';
+    }
 
-# --- Metin mesajları (admin ekleme/düzenleme) ---
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
-        return
-    state = context.user_data.get("state")
-    text = (update.message.text or "").strip()
+    function submitUser() {
+        const title = document.getElementById('title').value;
+        const description = document.getElementById('description').value;
+        const sub_url = document.getElementById('sub_url').value;
 
-    if state == "adding":
-        bolum = context.user_data.get("add_bolum")
-        if ";" not in text:
-            await update.message.reply_text("Format yanlış. Lütfen: isim;fiyat")
-            return
-        isim, fiyat_raw = map(str.strip, text.split(";",1))
-        try:
-            fiyat = int(fiyat_raw)
-        except ValueError:
-            await update.message.reply_text("Fiyat sayı olmalı.")
-            return
-        urunler = urunleri_oku()
-        urunler.append({"bolum": bolum, "isim": isim, "fiyat": fiyat})
-        urunleri_yaz(urunler)
-        await update.message.reply_text(f"✅ '{isim}' ürünü eklendi. Fiyat: {fiyat} TL")
-        context.user_data.pop("state", None)
-        context.user_data.pop("add_bolum", None)
-        return
+        if(!title || !sub_url) {
+            alert('Gerekli alanları doldurun!');
+            return;
+        }
 
-    if state == "editing":
-        bolum = context.user_data.get("edit_bolum")
-        hedef = context.user_data.get("edit_target")
-        try:
-            yeni_fiyat = int(text)
-        except ValueError:
-            await update.message.reply_text("Fiyat sayı olmalı.")
-            return
-        urunler = urunleri_oku()
-        changed = False
-        for u in urunler:
-            if u["bolum"]==bolum and u["isim"]==hedef:
-                u["fiyat"] = yeni_fiyat
-                changed = True
-                break
-        if changed:
-            urunleri_yaz(urunler)
-            await update.message.reply_text(f"✅ '{hedef}' fiyatı {yeni_fiyat} TL olarak güncellendi.")
-        else:
-            await update.message.reply_text("Ürün bulunamadı.")
-        context.user_data.pop("state", None)
-        context.user_data.pop("edit_bolum", None)
-        context.user_data.pop("edit_target", None)
-        return
+        fetch('/add_user', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, description, sub_url })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if(data.status === 'success') {
+                closeModal();
+                location.reload();
+            } else {
+                alert(data.message);
+            }
+        });
+    }
 
-# --- Ana fonksiyon ---
-def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("panel", panel))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    print("Bot çalışıyor...")
-    app.run_polling()
+    function copyCode(encryptedCode) {
+        navigator.clipboard.writeText(encryptedCode).then(() => {
+            alert("Happ şifrelenmiş kod panoya kopyalandı!");
+        }).catch(err => {
+            alert("Kopyalama başarısız oldu.");
+        });
+    }
+</script>
 
-if __name__ == "__main__":
-    main()
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    active_count = len(users_db)
+    return render_template_string(HTML_TEMPLATE, users=users_db, active_count=active_count)
+
+@app.route('/add_user', methods=['POST'])
+def add_user():
+    data = request.json
+    title = data.get('title')
+    description = data.get('description')
+    sub_url = data.get('sub_url')
+    
+    if not title or not sub_url:
+        return jsonify({"status": "error", "message": "Gerekli alanları doldurun!"}), 400
+        
+    encrypted_code = encrypt_happ_data(title, description, sub_url)
+    
+    new_user = {
+        "id": str(len(users_db) + 1),
+        "title": title,
+        "description": description,
+        "sub_url": sub_url,
+        "encrypted_code": encrypted_code,
+        "usage": "0.0 / 50.0 GB",
+        "status": "0%"
+    }
+    users_db.append(new_user)
+    return jsonify({"status": "success"})
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
