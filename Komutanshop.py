@@ -1,336 +1,171 @@
-from flask import Flask, request, jsonify, render_template_string
-import json
-import os
-import requests
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
+import paramiko
 
-app = Flask(__name__)
+TOKEN = "8903038115:AAFQ2l_Ga-DRwBaUuhGMrB59_QspWgY5jE8"
 
-DB_FILE = "users_db.json"
+user_data_store = {}
 
-def load_db():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data_store[update.effective_user.id] = {}
+    await update.message.reply_text("IP yaz:")
+    context.user_data["step"] = "ip"
 
-def save_db(data):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+async def messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    text = update.message.text
 
-users_db = load_db()
+    step = context.user_data.get("step")
 
-def get_marzban_stats(sub_url):
-    """Marzban linkinin HTTP Header'ından anlık kota durumunu çeker."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) v2rayN/6.23"
-    }
-    try:
-        response = requests.get(sub_url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            user_info = response.headers.get("Subscription-User-Info") or response.headers.get("subscription-user-info")
-            
-            used_gb = 0.0
-            total_gb = 0.0
-            status_pct = "0%"
-            
-            if user_info:
-                data_dict = {}
-                for item in user_info.split(";"):
-                    if "=" in item:
-                        k, v = item.strip().split("=")
-                        data_dict[k] = int(v) if v.isdigit() else 0
-                
-                upload = data_dict.get("upload", 0)
-                download = data_dict.get("download", 0)
-                total = data_dict.get("total", 0)
-                
-                used_bytes = upload + download
-                used_gb = round(used_bytes / (1024**3), 1)
-                total_gb = round(total / (1024**3), 1) if total > 0 else 0.0
-                
-                if total > 0:
-                    status_pct = f"{min(int((used_bytes / total) * 100), 100)}%"
-            
-            return f"{used_gb} / {total_gb if total_gb > 0 else 'Çäksiz'} GB", status_pct
-    except Exception as e:
-        print(f"Marzban veri okuma hatası: {e}")
-    
-    return "0.0 / 50.0 GB", "0%"
+    if step == "ip":
+        user_data_store[uid]["ip"] = text
+        context.user_data["step"] = "password"
+        await update.message.reply_text("VPS şifresi:")
+        return
 
-def generate_happ_crypt5(title, description, sub_url):
-    """
-    Paneldeki 3 veriyi Happ API'sinin tam olarak tanıdığı parametre isimleriyle paketler
-    ve geriye 'happ://crypt5/...' şeklinde şifrelenmiş kodu döndürür.
-    """
-    api_url = "https://crypto.happ.su/api-v2.php"
-    
-    # Happ istemcisinin çözdüğünde tam olarak aradığı parametre haritası:
-    # name = Uygulamanın en üstündeki Başlık (HappiVPN {Free})
-    # content = 77 GB altındaki o detaylı duyuru alanı
-    # url = Arka planda çalışan gerçek Marzban linki
-    payload = {
-        "name": title,
-        "content": description,
-        "url": sub_url
-    }
-    
-    headers = {"Content-Type": "application/json"}
-    
-    try:
-        response = requests.post(api_url, json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            res_text = response.text.strip()
-            # Eğer API doğrudan crypt5 string dönerse
-            if res_text.startswith("happ://crypt5/"):
-                return res_text
-            else:
-                # API obje dönerse içinden şifreli veriyi ayıklıyoruz
-                try:
-                    res_json = response.json()
-                    return res_json.get("crypt") or res_json.get("url") or res_text
-                except:
-                    return res_text
-    except Exception as e:
-        print(f"Happ Kripto Sunucu Bağlantı Hatası: {e}")
-    
-    return None
+    if step == "password":
+        user_data_store[uid]["password"] = text
 
-# HTML Arayüzü (Görsellerdeki Tasarıma Göre Tam Senkronize Edildi)
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="tk">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Subscription Panel</title>
-    <style>
-        :root {
-            --bg-color: #0b111e;
-            --card-bg: #131c2e;
-            --input-bg: #1b263b;
-            --accent-blue: #2563eb;
-            --accent-glow: #3b82f6;
-            --text-main: #ffffff;
-            --text-muted: #64748b;
-        }
+        keyboard = [
+            [
+                InlineKeyboardButton("Admin goş", callback_data="add"),
+                InlineKeyboardButton("Admin aýyr", callback_data="delete")
+            ]
+        ]
 
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        body { background-color: var(--bg-color); color: var(--text-main); padding: 20px; display: flex; justify-content: center; }
-        
-        .container { width: 100%; max-width: 480px; }
+        await update.message.reply_text(
+            "Marzban Admin goş/aýyr",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-        .header { margin-bottom: 25px; display: flex; flex-direction: column; text-align: left; }
-        .logo-area { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-        .logo-icon { width: 32px; height: 32px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: bold; }
-        .logo-text { font-size: 22px; font-weight: bold; letter-spacing: 0.5px; }
-        
-        .owner-notice { font-size: 13px; color: var(--text-muted); margin-bottom: 2px; font-weight: 500; padding-left: 2px; }
-        .owner-tg { font-size: 13px; color: var(--accent-glow); font-weight: bold; margin-bottom: 10px; padding-left: 2px; }
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-        .stat-card { background-color: var(--card-bg); padding: 20px; border-radius: 16px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid var(--accent-blue); position: relative; width: 100%; }
-        .stat-info { display: flex; align-items: center; gap: 15px; }
-        .stat-icon-wrapper { width: 45px; height: 45px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
-        .icon-blue { background-color: rgba(37, 99, 235, 0.2); color: #3b82f6; }
-        .stat-label { font-size: 15px; color: #cbd5e1; }
-        .stat-value { font-size: 22px; font-weight: bold; }
+    if query.data == "add":
+        context.user_data["action"] = "add"
+        await query.message.reply_text("Username:")
+        context.user_data["step"] = "username"
 
-        .section-header { display: flex; justify-content: space-between; align-items: center; margin: 25px 0 15px 0; width: 100%; }
-        .section-title { font-size: 19px; font-weight: 600; }
-        .btn-create { background-color: var(--accent-blue); color: white; border: none; padding: 10px 18px; border-radius: 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: 0.2s; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3); }
-        .btn-create:hover { background-color: var(--accent-glow); transform: translateY(-1px); }
+    elif query.data == "delete":
+        context.user_data["action"] = "delete"
+        await query.message.reply_text("Username:")
+        context.user_data["step"] = "delete_username"
 
-        .user-card { background-color: var(--card-bg); border-radius: 16px; padding: 15px; margin-bottom: 12px; width: 100%; }
-        .user-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .user-name { display: flex; align-items: center; gap: 8px; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; max-width: 70%; }
-        .badge { background-color: #1e293b; color: #3b82f6; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
-        .status-badge { color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
-        .user-stats-text { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; text-align: left; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
-        
-        .action-buttons { display: flex; gap: 8px; }
-        .btn-action { flex: 1; padding: 10px; border-radius: 10px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.2s; text-align: center; }
-        .btn-kodal { background-color: var(--accent-blue); color: white; }
-        .btn-kodal:hover { background-color: var(--accent-glow); }
-        .btn-secondary { background-color: #1e293b; color: #94a3b8; }
-        .btn-secondary:hover { background-color: #334155; color: #f8fafc; }
+async def ssh_connect(ip, password):
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; padding: 20px; z-index: 100; }
-        .modal-content { background-color: var(--card-bg); width: 100%; max-width: 400px; border-radius: 20px; padding: 25px; border: 1px solid #1e293b; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: left; }
-        .modal-content h3 { margin-bottom: 15px; font-size: 18px; color: white; }
-        .modal-content input, .modal-content textarea { width: 100%; background-color: var(--input-bg); border: 1px solid #1e293b; border-radius: 10px; padding: 12px; color: white; margin-bottom: 12px; font-size: 14px; outline: none; }
-        .modal-content input:focus, .modal-content textarea:focus { border-color: var(--accent-glow); }
-        .modal-content textarea { height: 80px; resize: none; }
-        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 5px; }
-        .btn-submit { background-color: var(--accent-blue); color: white; padding: 10px 20px; border-radius: 10px; border: none; cursor: pointer; font-weight: 600; }
-        .btn-cancel { background-color: #334155; color: white; padding: 10px 20px; border-radius: 10px; border: none; cursor: pointer; }
-    </style>
-</head>
-<body>
+    ssh.connect(
+        hostname=ip,
+        username="root",
+        password=password
+    )
 
-<div class="container">
-    <div class="header">
-        <div class="logo-area">
-            <div class="logo-icon">S</div>
-            <div class="logo-text">Subscription Panel</div>
-        </div>
-        <div class="owner-notice">Ähli näsazlyklar uçin ownere yüz tutun</div>
-        <div class="owner-tg">TG: @Komutan_Creator</div>
-    </div>
+    return ssh
 
-    <div class="stat-card">
-        <div class="stat-info">
-            <div class="stat-icon-wrapper icon-blue">👥</div>
-            <div class="stat-label">Aktiw ulanyjylar</div>
-        </div>
-        <div class="stat-value" id="active-count-display">{{ active_count }} / {{ active_count }}</div>
-    </div>
+async def process(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    text = update.message.text
 
-    <div class="section-header">
-        <div class="section-title">Ulanyjy kodlary</div>
-        <button class="btn-create" onclick="openModal()">+ Ulanyjy döret</button>
-    </div>
+    step = context.user_data.get("step")
 
-    <div id="users-list">
-        {% for user in users %}
-        <div class="user-card">
-            <div class="user-meta">
-                <div class="user-name">
-                    <span>{{ user.title }}</span>
-                    <span class="badge">crypt5</span>
-                </div>
-                <div class="status-badge">{{ user.status }}</div>
-            </div>
-            <div class="user-stats-text">{{ user.usage }} • {{ user.description }}</div>
-            
-            <div class="action-buttons">
-                <button class="btn-action btn-kodal" onclick="copyToClipboard('{{ user.encrypted_code }}', 'Happ Crypt5 kody panoya kopyalandy!')">Kod al</button>
-                <button class="btn-action btn-secondary" onclick="downloadFile('{{ user.title }}', '{{ user.encrypted_code }}')">File</button>
-                <button class="btn-action btn-secondary" onclick="copyToClipboard('{{ user.sub_url }}', 'Marzban URL kopyalandy!')">URL</button>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
+    if step == "username":
+        user_data_store[uid]["username"] = text
 
-<div class="modal-overlay" id="addModal">
-    <div class="modal-content">
-        <h3>Taze Ulanyjy Döret</h3>
-        <input type="text" id="title" placeholder="1. Yazı Yeri (Örn: HappiVPN {Free})">
-        <textarea id="description" placeholder="2. Yazı Yeri (77GB altındaki duyuru yazısı)"></textarea>
-        <input type="url" id="sub_url" placeholder="3. Yazı Yeri (Marzban Subscription URL)">
-        
-        <div class="modal-actions">
-            <button class="btn-cancel" onclick="closeModal()">Ýatyr</button>
-            <button class="btn-submit" onclick="submitUser()">Tamam</button>
-        </div>
-    </div>
-</div>
+        keyboard = [
+            [
+                InlineKeyboardButton("Uly Admin", callback_data="super_yes"),
+                InlineKeyboardButton("Klient", callback_data="super_no")
+            ]
+        ]
 
-<script>
-    function openModal() {
-        document.getElementById('addModal').style.display = 'flex';
-    }
+        await update.message.reply_text(
+            "Admin tipi:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-    function closeModal() {
-        document.getElementById('addModal').style.display = 'none';
-        document.getElementById('title').value = '';
-        document.getElementById('description').value = '';
-        document.getElementById('sub_url').value = '';
-    }
+    elif step == "admin_password":
+        user_data_store[uid]["admin_password"] = text
+        context.user_data["step"] = "confirm_password"
 
-    function submitUser() {
-        const title = document.getElementById('title').value;
-        const description = document.getElementById('description').value;
-        const sub_url = document.getElementById('sub_url').value;
+        await update.message.reply_text("Emin misin? Şifreyi tekrar yaz:")
 
-        if(!title || !sub_url) {
-            alert('Gerekli alanları doldurun!');
-            return;
-        }
+    elif step == "confirm_password":
+        ip = user_data_store[uid]["ip"]
+        vps_pass = user_data_store[uid]["password"]
+        username = user_data_store[uid]["username"]
+        admin_pass = user_data_store[uid]["admin_password"]
+        superuser = user_data_store[uid]["superuser"]
 
-        fetch('/add_user', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, description, sub_url })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if(data.status === 'success') {
-                closeModal();
-                location.reload();
-            } else {
-                alert(data.message);
-            }
-        }).catch(err => alert("Şifreleme motoru yanıt vermedi!"));
-    }
+        ssh = await ssh_connect(ip, vps_pass)
 
-    function copyToClipboard(text, successMessage) {
-        navigator.clipboard.writeText(text).then(() => {
-            alert(successMessage);
-        }).catch(err => {
-            alert("Kopyalama başarısız oldu.");
-        });
-    }
+        shell = ssh.invoke_shell()
 
-    function downloadFile(filename, text) {
-        const element = document.createElement('a');
-        element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
-        element.setAttribute('download', filename.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".happ");
-        element.style.display = 'none';
-        document.body.appendChild(element);
-        element.click();
-        document.body.removeChild(element);
-    }
-</script>
+        shell.send("marzban cli admin create\n")
+        shell.send(f"{username}\n")
+        shell.send(f"{superuser}\n")
+        shell.send(f"{admin_pass}\n")
+        shell.send(f"{text}\n")
+        shell.send("\n")
+        shell.send("\n")
 
-</body>
-</html>
-"""
+        ssh.close()
 
-@app.route('/')
-def index():
-    # Sayfa her açıldığında mevcut Marzban linklerinin kotalarını anlık tazeler
-    updated_db = []
-    for user in users_db:
-        usage, status = get_marzban_stats(user["sub_url"])
-        user["usage"] = usage
-        user["status"] = status
-        updated_db.append(user)
-    
-    save_db(updated_db)
-    active_count = len(updated_db)
-    return render_template_string(HTML_TEMPLATE, users=updated_db, active_count=active_count)
+        await update.message.reply_text("Admin goşuldy ✅")
 
-@app.route('/add_user', methods=['POST'])
-def add_user():
-    data = request.json
-    title = data.get('title')
-    description = data.get('description') or ""
-    sub_url = data.get('sub_url')
-    
-    if not title or not sub_url:
-        return jsonify({"status": "error", "message": "Gerekli alanları doldurun!"}), 400
-        
-    # 'Tamam' butonuna basıldığı an, arka planda Happ API'sine bağlanıp tam uyumlu happ://crypt5/ şifrelemesini üretir.
-    encrypted_code = generate_happ_crypt5(title, description, sub_url)
-    
-    if not encrypted_code:
-        return jsonify({"status": "error", "message": "Happ şifreleme motorundan kod alınamadı! Linki kontrol edin."}), 500
-        
-    usage, status = get_marzban_stats(sub_url)
-    
-    new_user = {
-        "id": str(len(users_db) + 1),
-        "title": title,
-        "description": description,
-        "sub_url": sub_url,
-        "encrypted_code": encrypted_code, # Tam istediğin happ://crypt5/... yapısı burada saklanır
-        "usage": usage,
-        "status": status
-    }
-    
-    users_db.append(new_user)
-    save_db(users_db)
-    return jsonify({"status": "success"})
+    elif step == "delete_username":
+        ip = user_data_store[uid]["ip"]
+        vps_pass = user_data_store[uid]["password"]
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+        ssh = await ssh_connect(ip, vps_pass)
+
+        shell = ssh.invoke_shell()
+
+        shell.send("marzban cli admin delete\n")
+        shell.send(f"{text}\n")
+
+        ssh.close()
+
+        await update.message.reply_text("Admin aýryldy ❌")
+
+async def super_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "super_yes":
+        context.user_data["step"] = "admin_password"
+
+        uid = query.from_user.id
+        user_data_store[uid]["superuser"] = "y"
+
+        await query.message.reply_text("Password:")
+
+    elif query.data == "super_no":
+        context.user_data["step"] = "admin_password"
+
+        uid = query.from_user.id
+        user_data_store[uid]["superuser"] = "n"
+
+        await query.message.reply_text("Password:")
+
+app = Application.builder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(buttons, pattern="^(add|delete)$"))
+app.add_handler(CallbackQueryHandler(super_buttons, pattern="^(super_yes|super_no)$"))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, messages))
+
+app.run_polling()
